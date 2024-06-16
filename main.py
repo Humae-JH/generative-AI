@@ -37,9 +37,12 @@ test_loader = torch.utils.data.DataLoader(test_data,
                                           shuffle=False,
                                           num_workers=num_workers)
 
-VAE = model.VAE(device, learning_rate)
+#VAE = model.VAE(device, learning_rate)
 
-VAE.Train(epoch, train_loader)
-VAE.valid(test_loader)
+#VAE.Train(epoch, train_loader)
+#VAE.valid(test_loader)
+
+DCGan = model.DCGAN(device, learning_rate)
+DCGan.Train(epoch, train_loader)
 
 

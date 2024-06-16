@@ -5,23 +5,25 @@ from torch.optim import *
 import torchvision
 
 class BaseModel(nn.Module):
-    def __init__(self):
+    def __init__(self, device, lr):
         super().__init__()
+        self.device = device
+        self.learning_rate = lr
         pass
 
     @abstractmethod
     def forward(self,x):
         pass
 
-    def Train(self):
+    def Train(self, epoch, dataloader):
         pass
 
     def valid(self):
         pass
 
 class VAEEncoder(BaseModel):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
         self.network = nn.Sequential(
                 nn.Conv2d(1, 32, 3, 2, 1), # output : H, W, C = 16, 16, 32)
                 nn.ReLU(),
@@ -50,8 +52,8 @@ class VAEEncoder(BaseModel):
 
 
 class VAEDecoder(BaseModel):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
         self.linear = nn.Linear(10, 2048)
 
         self.network = nn.Sequential(
@@ -73,13 +75,12 @@ class VAEDecoder(BaseModel):
 
 class VAE(BaseModel):
     def __init__(self, device, lr):
-        super().__init__()
-        self.device = device
-        self.learning_rate = lr
-        self.encoder = VAEEncoder().to(device)
-        self.decoder = VAEDecoder().to(device)
+        super().__init__(device, lr)
 
-        self.optimizer = Adam(self.parameters(), lr=lr)
+        self.encoder = VAEEncoder(device, lr).to(self.device)
+        self.decoder = VAEDecoder(device, lr).to(self.device)
+
+        self.optimizer = Adam(self.parameters(), lr=self.learning_rate)
         #self.KLloss = torch.nn.KLDivLoss()
         self.Reconloss = torch.nn.BCELoss()
 
@@ -90,11 +91,11 @@ class VAE(BaseModel):
 
     def Train(self, epoch, dataloader):
         self.train()
-        train_loss = 0
         for i in range(0, epoch):
-
+            train_loss = 0
             print(f"[train epoch] : {i} ")
             for  _, (x,y) in enumerate(dataloader):
+                self.zero_grad()
                 self.optimizer.zero_grad()
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -136,11 +137,84 @@ class VAE(BaseModel):
     def inference(self, z):
         self.decoder.forward(z)
 
-class GAN(BaseModel):
-    def __init__(self):
-        super().__init__()
-        pass
+class DCGAN(BaseModel):
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
+
+        self.discriminator = nn.Sequential(
+            nn.Conv2d(1, 16, 5, 1), # 32 -> 28
+            nn.LeakyReLU(),
+            nn.Dropout(0.2),
+            nn.MaxPool2d(2), # 28 -> 14
+            nn.Conv2d(16, 32, 3, 1), # 14->12
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(),
+            nn.Dropout(0.2),
+            nn.MaxPool2d(2), # 12 -> 6
+            nn.Conv2d(32, 64, 3, 1), # 6 -> 4
+            nn.BatchNorm2d(64),
+            nn.Sigmoid(),
+            nn.Flatten(1, -1), # 4, 4, 64
+        )
+
+        self.generator = nn.Sequential(
+            nn.Linear(100, 2048),
+            nn.Unflatten(1, torch.Size([128,4,4])),
+            nn.ConvTranspose2d(128,64, 5,1, 0), # 4 -> 8
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.ConvTranspose2d(64, 16, 4, 2, 1), # 8 -> 16
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.ConvTranspose2d(16, 1, 4, 2, 1), # 16 -> 32
+            nn.Sigmoid(),
+        )
+        self.optimizerG = Adam(self.generator.parameters(), self.learning_rate)
+        self.optimizerD = Adam(self.discriminator.parameters(), self.learning_rate)
+
+        self.loss = nn.BCELoss()
+
+
 
     def forward(self,x):
         pass
+
+    def Train(self, epoch, dataloader):
+        self.train()
+        for i in range(0, epoch):
+            train_loss = 0
+            for i, (x, y) in enumerate(dataloader):
+                self.discriminator.zero_grad()
+
+                # train Discriminator with real data
+                dis_out = self.discriminator(x)
+                label = torch.ones_like(dis_out)
+                errD_real = self.loss(dis_out, label)
+                errD_real.backward()
+                D_x = dis_out.data.mean()
+
+                # train Discriminator with fake data
+                noise = torch.randn(len(x), 100)
+                gen_out = self.generator(noise)
+                dis_out_fake = self.discriminator(gen_out)
+                label = torch.zeros_like(dis_out_fake)
+                errD_fake = self.loss(dis_out_fake, label)
+                D_G_z1 = dis_out_fake.data.mean()
+
+                errD = errD_real + errD_fake
+                train_loss += errD.item()
+                self.optimizerD.step()
+
+
+                # train generator
+                self.generator.zero_grad()
+                
+
+                if i % 100 == 0:
+                    print(f"train_loss : {train_loss / len(dataloader.dataset)}")
+
+
+
 
