@@ -3,6 +3,10 @@ import torch
 from abc import *
 from torch.optim import *
 import torchvision
+import torchvision.utils as vutils
+import os
+import matplotlib.pyplot as plt
+import numpy as np
 
 class BaseModel(nn.Module):
     def __init__(self, device, lr):
@@ -20,6 +24,36 @@ class BaseModel(nn.Module):
 
     def valid(self):
         pass
+
+    @abstractmethod
+    def generate(self, z):
+        pass
+
+    def saveImage(self, images, output_dir, image_name):
+        img_grid = vutils.make_grid(images, padding=2, normalize=True)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        save_path = os.path.join(output_dir, image_name)
+        vutils.save_image(img_grid, save_path, normalize=True)
+        return
+
+    def showImage(self, images):
+        img_grid = vutils.make_grid(images, padding=2, normalize=True)
+        # Show the images
+        plt.figure(figsize=(8, 8))
+        plt.axis('off')
+        plt.title(f'Generated Images')
+        plt.imshow(np.transpose(img_grid, (1, 2, 0)))
+        plt.show()
+
+    def showLossGraph(self, losses, loss_name):
+        plt.figure(figsize=(10, 5))
+        plt.title(f"{ loss_name } Loss During Training")
+        plt.plot(losses, label=loss_name)
+        plt.xlabel("iterations")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.show()
 
 class VAEEncoder(BaseModel):
     def __init__(self, device, lr):
@@ -134,73 +168,107 @@ class VAE(BaseModel):
         print(f"validation loss : {avg_loss}")
 
 
-    def inference(self, z):
-        self.decoder.forward(z)
+    def generate(self,z):
+        image = self.decoder.forward(z)
+        return image
 
 class DCGAN(BaseModel):
-    def __init__(self, device, lr):
+    def __init__(self, device, lr, batch_size):
         super().__init__(device, lr)
-
+        self.batch_size = batch_size
+        self.dropout = 0.0
+        """ Pooling 계층을 사용하는것 보다 Stride를 사용하는 것이 자체 pool을 학습해서 더 유리하다! """
         self.discriminator = nn.Sequential(
-            nn.Conv2d(1, 16, 5, 1), # 32 -> 28
-            nn.LeakyReLU(),
-            nn.Dropout(0.2),
-            nn.MaxPool2d(2), # 28 -> 14
-            nn.Conv2d(16, 32, 3, 1), # 14->12
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.Dropout(0.2),
-            nn.MaxPool2d(2), # 12 -> 6
-            nn.Conv2d(32, 64, 3, 1), # 6 -> 4
+            nn.Conv2d(3, 64, 3, 2, 1), # 64 -> 32
             nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(self.dropout),
+            nn.Conv2d(64, 128, 3, 2, 1), # 32-> 16
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(self.dropout),
+            nn.Conv2d(128, 256, 3, 2, 1), # 16 -> 8
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(self.dropout),
+            nn.Conv2d(256, 512, 3, 2, 1), # 8 -> 4
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(512, 1, 4, 1, 0), # 4 -> 1
             nn.Sigmoid(),
-            nn.Flatten(1, -1), # 4, 4, 64
+            #nn.Conv2d(128, 256, 4, 1,  0), # 4 -> 1
+            #nn.BatchNorm2d(256),
+            #nn.LeakyReLU(0.2),
+            #nn.Conv2d(256, 1, 1, 1, 0),
+            #nn.Sigmoid(),
         )
 
         self.generator = nn.Sequential(
-            nn.Linear(100, 2048),
-            nn.Unflatten(1, torch.Size([128,4,4])),
-            nn.ConvTranspose2d(128,64, 5,1, 0), # 4 -> 8
-            nn.BatchNorm2d(64),
+            nn.Linear(100, 1024*4*4),
+            nn.Unflatten(1, torch.Size([1024,4,4])),
+            nn.ConvTranspose2d(1024,512, 4 ,2, 1), # 4 -> 8
+            nn.BatchNorm2d(512),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.ConvTranspose2d(64, 16, 4, 2, 1), # 8 -> 16
-            nn.BatchNorm2d(16),
+            nn.Dropout(self.dropout),
+            nn.ConvTranspose2d(512, 256, 4, 2, 1), # 4 -> 8 ( 계산식 : (input - 1) * stride - 2 * padding + (kernel_size - 1) + outpadding + 1
+            nn.BatchNorm2d(256),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.ConvTranspose2d(16, 1, 4, 2, 1), # 16 -> 32
-            nn.Sigmoid(),
+            nn.Dropout(self.dropout),
+            nn.ConvTranspose2d(256, 128, 4, 2, 1), # 8 -> 16
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Dropout(self.dropout),
+            nn.ConvTranspose2d(128, 3, 4, 2, 1), # 16 -> 32
+            nn.Tanh(),
+            #nn.BatchNorm2d(64),
+            #nn.ReLU(),
+            #nn.Dropout(self.dropout),
+            #nn.ConvTranspose2d(64, 3, 4, 2, 1), ## 32 -> 64
+            #nn.Tanh(),
         )
-        self.optimizerG = Adam(self.generator.parameters(), self.learning_rate)
-        self.optimizerD = Adam(self.discriminator.parameters(), self.learning_rate)
+        self.generator.apply(self.weights_init)
+        self.discriminator.apply(self.weights_init)
+        self.optimizerG = Adam(self.generator.parameters(), 0.001, betas=(0.5, 0.999))
+        self.optimizerD = Adam(self.discriminator.parameters(), 0.0002, betas=(0.5, 0.999))
 
         self.loss = nn.BCELoss()
 
-
-
-    def forward(self,x):
-        pass
+    def weights_init(self,m):
+        classname = m.__class__.__name__
+        if classname.find('Conv') != -1:
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif classname.find('BatchNorm') != -1:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)
 
     def Train(self, epoch, dataloader):
+        img_list = []
+        self.G_losses = []
+        self.D_losses = []
+        iters = 0
+
+        fixed_noise = torch.randn(self.batch_size, 100)
         self.train()
-        for i in range(0, epoch):
+        for e in range(0, epoch):
             train_loss = 0
             for i, (x, y) in enumerate(dataloader):
                 self.discriminator.zero_grad()
 
                 # train Discriminator with real data
                 dis_out = self.discriminator(x)
-                label = torch.ones_like(dis_out)
+                label = torch.ones_like(dis_out) # 1 : real label
                 errD_real = self.loss(dis_out, label)
                 errD_real.backward()
                 D_x = dis_out.data.mean()
 
                 # train Discriminator with fake data
-                noise = torch.randn(len(x), 100)
+                noise = torch.randn(self.batch_size, 100)
                 gen_out = self.generator(noise)
-                dis_out_fake = self.discriminator(gen_out)
-                label = torch.zeros_like(dis_out_fake)
+                """"!!! discriminator 학습시 generator는 학습해서는 안된다!! 따라서 detach()를 사용해서 generator의 파라미터가 관여 못하게!"""
+                dis_out_fake = self.discriminator(gen_out.detach())
+                label = torch.zeros_like(dis_out_fake) # fake label
                 errD_fake = self.loss(dis_out_fake, label)
+                errD_fake.backward()
                 D_G_z1 = dis_out_fake.data.mean()
 
                 errD = errD_real + errD_fake
@@ -210,10 +278,52 @@ class DCGAN(BaseModel):
 
                 # train generator
                 self.generator.zero_grad()
-                
+                label = torch.ones_like(dis_out_fake) # real label to train generator
+                output = self.discriminator(gen_out)
 
-                if i % 100 == 0:
-                    print(f"train_loss : {train_loss / len(dataloader.dataset)}")
+                errG = self.loss(output, label)
+                errG.backward()
+                D_G_z2 = output.data.mean()
+                self.optimizerG.step()
+
+
+                if i % 50 == 0:
+                    print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
+                          % (e, epoch, i, len(dataloader),
+                             errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+
+                # 이후 그래프를 그리기 위해 손실값들을 저장해둡니다
+                self.G_losses.append(errG.item())
+                self.D_losses.append(errD.item())
+
+                # fixed_noise를 통과시킨 G의 출력값을 저장해둡니다
+                if (iters % 500 == 0) or ((e == epoch - 1) and (i == len(dataloader) - 1)):
+                    with torch.no_grad():
+                        fake = self.generator(fixed_noise).detach().cpu()
+                    img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
+
+                iters += 1
+
+        self.showLossGraph()
+
+
+    def generate(self, z):
+        generated_image = self.generator(z)
+        return generated_image
+
+    def showLossGraph(self):
+        plt.figure(figsize=(10, 5))
+        plt.title("Generator and Discriminator Loss During Training")
+        plt.plot(self.G_losses, label="G")
+        plt.plot(self.D_losses, label="D")
+        plt.xlabel("iterations")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.show()
+
+
+
+
 
 
 
