@@ -55,21 +55,38 @@ class BaseModel(nn.Module):
         plt.legend()
         plt.show()
 
+    def saveState(self, model, model_name):
+        if ".pth" not in model_name:
+            model_name = model_name + ".pth"
+        torch.save(model.state_dict(), model_name)
+        print(f"weight has been saved [{model_name}]")
+        return
+
+    def loadState(self, model, path):
+        if ".pth" not in path:
+            model = path + ".pth"
+        model.load_state_dict(torch.load(path, map_location=self.device)).to(self.device)
+        print(f"{model}'s weight has been loaded [{path}]")
+        return
+
 class VAEEncoder(BaseModel):
     def __init__(self, device, lr):
         super().__init__(device, lr)
         self.network = nn.Sequential(
-                nn.Conv2d(1, 32, 3, 2, 1), # output : H, W, C = 16, 16, 32)
-                nn.ReLU(),
-                nn.Conv2d(32, 64, 3, 2, 1),
-                nn.ReLU(),
-                nn.Conv2d(64, 128,3, 2, 1), #4, 4, 128
-                nn.ReLU(),
+                nn.Conv2d(3, 64, 3, 2, 1), # 64->32
+                nn.LeakyReLU(),
+                nn.Conv2d(64, 128, 3, 2, 1), # 32 -> 16
+                nn.LeakyReLU(),
+                nn.Conv2d(128, 256, 3 , 2, 1), #16 -> 8
+                nn.LeakyReLU(),
+                nn.Conv2d(256, 512, 3, 2, 1), # 4
+                nn.LeakyReLU(),
+                nn.Conv2d(512, 1024, 4, 1, 0), # 1
                 nn.Flatten(1, -1)
         )
 
-        self.z_mean = nn.Linear(4*4*128, 10)
-        self.z_log_var = nn.Linear(4*4*128, 10)
+        self.z_mean = nn.Linear(1024, 100)
+        self.z_log_var = nn.Linear(1024, 100)
 
     def klLoss(self):
         return -0.5 * torch.sum(1 + self.logvar - self.mu.pow(2) - self.logvar.exp())
@@ -88,15 +105,23 @@ class VAEEncoder(BaseModel):
 class VAEDecoder(BaseModel):
     def __init__(self, device, lr):
         super().__init__(device, lr)
-        self.linear = nn.Linear(10, 2048)
+        self.linear = nn.Linear(100, 2048)
 
         self.network = nn.Sequential(
-            nn.Unflatten(1, torch.Size([128,4,4])),
-            nn.ConvTranspose2d(128,64, 5,1, 0),
+            nn.Unflatten(1, torch.Size([2048,1,1])),
+            nn.ConvTranspose2d(2048,1024, 4,1, 0), # 1->4
+            nn.BatchNorm2d(1024),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 4, 2, 1),
+            nn.ConvTranspose2d(1024, 512,  4, 2, 1), # 4 -> 8
+            nn.BatchNorm2d(512),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, 4, 2, 1),
+            nn.ConvTranspose2d(512, 256, 4, 2, 1), # 8 -> 16
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.ConvTranspose2d(256, 128, 4, 2, 1), # 16 -> 32
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 3, 4, 2, 1), # 32 -> 64
             nn.Sigmoid(),
         )
 
@@ -116,7 +141,7 @@ class VAE(BaseModel):
 
         self.optimizer = Adam(self.parameters(), lr=self.learning_rate)
         #self.KLloss = torch.nn.KLDivLoss()
-        self.Reconloss = torch.nn.BCELoss()
+        self.Reconloss = torch.nn.L1Loss()
 
     def forward(self, x):
         encoder_out, mu, logvar = self.encoder.forward(x)
@@ -148,6 +173,7 @@ class VAE(BaseModel):
 
 
         return
+
 
 
     def valid(self, dataloader):
@@ -201,7 +227,7 @@ class DCGAN(BaseModel):
             #nn.LeakyReLU(0.2),
             #nn.Conv2d(256, 1, 1, 1, 0),
             #nn.Sigmoid(),
-        )
+        ).to(self.device)
 
         self.generator = nn.Sequential(
             nn.Linear(100, 1024*4*4),
@@ -225,11 +251,11 @@ class DCGAN(BaseModel):
             #nn.Dropout(self.dropout),
             #nn.ConvTranspose2d(64, 3, 4, 2, 1), ## 32 -> 64
             #nn.Tanh(),
-        )
+        ).to(self.device)
         self.generator.apply(self.weights_init)
         self.discriminator.apply(self.weights_init)
-        self.optimizerG = Adam(self.generator.parameters(), 0.001, betas=(0.5, 0.999))
-        self.optimizerD = Adam(self.discriminator.parameters(), 0.0002, betas=(0.5, 0.999))
+        self.optimizerG = Adam(self.generator.parameters(), self.learning_rate, betas=(0.5, 0.999))
+        self.optimizerD = Adam(self.discriminator.parameters(), self.learning_rate / 4.0, betas=(0.5, 0.999))
 
         self.loss = nn.BCELoss()
 
@@ -247,13 +273,13 @@ class DCGAN(BaseModel):
         self.D_losses = []
         iters = 0
 
-        fixed_noise = torch.randn(self.batch_size, 100)
+        fixed_noise = torch.randn(self.batch_size, 100).to(self.device)
         self.train()
         for e in range(0, epoch):
             train_loss = 0
             for i, (x, y) in enumerate(dataloader):
                 self.discriminator.zero_grad()
-
+                x = x.to(self.device)
                 # train Discriminator with real data
                 dis_out = self.discriminator(x)
                 label = torch.ones_like(dis_out) # 1 : real label
@@ -262,7 +288,7 @@ class DCGAN(BaseModel):
                 D_x = dis_out.data.mean()
 
                 # train Discriminator with fake data
-                noise = torch.randn(self.batch_size, 100)
+                noise = torch.randn(self.batch_size, 100).to(self.device)
                 gen_out = self.generator(noise)
                 """"!!! discriminator 학습시 generator는 학습해서는 안된다!! 따라서 detach()를 사용해서 generator의 파라미터가 관여 못하게!"""
                 dis_out_fake = self.discriminator(gen_out.detach())
