@@ -347,6 +347,164 @@ class DCGAN(BaseModel):
         plt.legend()
         plt.show()
 
+class DiffusionModel(BaseModel):
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
+        pass
+
+    def forward(self, x):
+        pass
+
+    def Train(self, epoch, dataloader):
+        pass
+
+class UNet(BaseModel):
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
+
+
+
+        self.down1_res1 = ResidualBlock(3, 16)
+        self.down1_res2 = ResidualBlock(16, 32)
+        self.avgPool = nn.AvgPool2d(2)
+
+        self.down2_res1 = ResidualBlock(32, 48)
+        self.down2_res2 = ResidualBlock(48, 64)
+
+        self.down3_res1 = ResidualBlock(64, 80)
+        self.down3_res2 = ResidualBlock(80, 96)
+
+        self.bottomRes1 = ResidualBlock(96, 128)
+        self.bottomRes2 = ResidualBlock(128, 96)
+
+        self.upSampling = nn.Upsample(scale_factor=2, mode="nearest")
+        self.up1_res1 = ResidualBlock(192, 80)
+        self.up1_res2 = ResidualBlock(80, 64)
+
+        self.up2_res1 = ResidualBlock(128, 48)
+        self.up2_res2 = ResidualBlock(48, 32)
+
+        self.up3_res1 = ResidualBlock(64, 16)
+        self.up3_res2 = ResidualBlock(16, 3)
+
+        self.optimizer = torch.optim.Adam(self.parameters(), self.learning_rate)
+        self.loss = nn.L1Loss()
+
+    def forward(self,x):
+        # Downblock 1
+        out = self.down1_res1(x)
+        out = self.down1_res2(out)
+        skip1 = torch.clone(out)
+        out = self.avgPool(out)
+
+        # Downblock 2
+        out = self.down2_res1(out)
+        out = self.down2_res2(out)
+        skip2 = torch.clone(out)
+        out = self.avgPool(out)
+
+        # Downblock3
+        out = self.down3_res1(out)
+        out = self.down3_res2(out)
+        skip3 = torch.clone(out)
+        out = self.avgPool(out)
+
+        # bottomblock
+        out = self.bottomRes1(out)
+        out = self.bottomRes2(out)
+
+        # Upblock1
+        out = self.upSampling(out)
+        out = torch.cat((skip3, out), 1)
+        out = self.up1_res1(out)
+        out = self.up1_res2(out)
+
+        #Upblock2
+        out = self.upSampling(out)
+        out = torch.cat((skip2, out), 1)
+        out = self.up2_res1(out)
+        out = self.up2_res2(out)
+
+        #Upblock 3
+        out = self.upSampling(out)
+        out = torch.cat((skip1, out), 1)
+        out = self.up3_res1(out)
+        out = self.up3_res2(out)
+
+        return out
+
+
+    def Train(self, epoch, dataloader):
+        self.train()
+        for i in range(0, epoch):
+            train_loss = 0
+            print(f"[train epoch] : {i} ")
+            for  _, (x,y) in enumerate(dataloader):
+                self.zero_grad()
+                self.optimizer.zero_grad()
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                y_hat = self.forward(x)
+                loss = self.loss(y_hat, x)
+                train_loss += loss.item()
+                if _ % 100 == 0:
+                    print(f"train_loss : {train_loss / len(dataloader.dataset)}")
+                loss.backward()
+                self.optimizer.step()
+
+class UpBlock(BaseModel):
+    def __init__(self,in_dim, out_dim, concatList=None, device=None, lr=0):
+        super().__init__(device, lr)
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.upSampling = nn.UpsamplingBilinear2d(2)
+        self.Res1 = ResidualBlock(in_dim, (in_dim + out_dim) / 2)
+        self.Res2 = ResidualBlock((in_dim + out_dim) / 2 , out_dim)
+
+    def forward(self, x):
+        scaled_x = self.upSampling(x)
+        out = self.Res1(scaled_x)
+        out2 = self.Res2(out)
+        return out2
+
+class DownBlock(BaseModel):
+    def __init__(self, in_dim, out_dim, device=None, lr=0):
+        super().__init__(device,lr)
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.Res1 = ResidualBlock(in_dim, (out_dim + in_dim) / 2)
+        self.Res2 = ResidualBlock((out_dim + in_dim)/2, out_dim)
+        self.avgPool = nn.AvgPool2d(2)
+
+    def forward(self, x):
+        out = self.Res1(x)
+        out2 = self.Res2(out)
+        return self.avgPool(out2)
+
+
+class ResidualBlock(BaseModel):
+    def __init__(self, in_dim, out_dim, device = None, lr = 0):
+        super().__init__(device, lr)
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.normalization = nn.BatchNorm2d(out_dim)
+        self.pixelwiseConv = nn.Conv2d(in_dim, out_dim, kernel_size=1)
+        self.network = nn.Sequential(
+            nn.Conv2d(out_dim, out_dim, kernel_size= 3, padding = 1),
+            nn.SiLU(),
+            nn.Conv2d(out_dim, out_dim, kernel_size=3, padding=1),
+        )
+        self.relu = nn.ReLU()
+
+    def forward(self,x):
+        if x.shape[1] != self.out_dim:
+            x = self.pixelwiseConv(x)
+        norm_x = self.normalization(x)
+        out = self.network(norm_x)
+        out = self.relu(out)
+        return out + x
+
 
 
 

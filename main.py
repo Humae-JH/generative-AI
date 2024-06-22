@@ -115,7 +115,10 @@ def VAE_train():
 
     return G_model
 
-G_model = VAE_train()
+#G_model = VAE_train()
+Unet = model.UNet(device, learning_rate)
+Unet.to(device)
+Unet.Train(epoch, train_loader)
 
 loop = 0
 while True:

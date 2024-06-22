@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="C:\Users\jaeho\anaconda3" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="generativeAI" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="gen-ai" project-jdk-type="Python SDK" />
 </project>
