@@ -1,4 +1,4 @@
-import model
+from model import *
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -116,9 +116,13 @@ def VAE_train():
     return G_model
 
 #G_model = VAE_train()
-Unet = model.UNet(device, learning_rate)
-Unet.to(device)
-Unet.Train(epoch, train_loader)
+#Unet = model.UNet(device, learning_rate)
+#Unet.to(device)
+#Unet.Train(epoch, train_loader)
+G_model = DiffusionModel(device, learning_rate)
+G_model.to(device)
+G_model.Train(epoch, dataloader=train_loader)
+
 
 loop = 0
 while True:

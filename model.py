@@ -7,6 +7,10 @@ import torchvision.utils as vutils
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
+import numpy as np
+import math
+
 
 class BaseModel(nn.Module):
     def __init__(self, device, lr):
@@ -347,16 +351,6 @@ class DCGAN(BaseModel):
         plt.legend()
         plt.show()
 
-class DiffusionModel(BaseModel):
-    def __init__(self, device, lr):
-        super().__init__(device, lr)
-        pass
-
-    def forward(self, x):
-        pass
-
-    def Train(self, epoch, dataloader):
-        pass
 
 class UNet(BaseModel):
     def __init__(self, device, lr):
@@ -415,7 +409,7 @@ class UNet(BaseModel):
 
         # Upblock1
         out = self.upSampling(out)
-        out = torch.cat((skip3, out), 1)
+        out = torch.cat((skip3, out), 1) # skip connection from Downblock 3
         out = self.up1_res1(out)
         out = self.up1_res2(out)
 
@@ -453,6 +447,127 @@ class UNet(BaseModel):
                 loss.backward()
                 self.optimizer.step()
 
+class UNet_Diff(UNet):
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
+        self.down1_res1 = ResidualBlock(4, 16)
+        self.noiseUpsampling = nn.Upsample(scale_factor = 4, mode="nearest")
+
+
+    def forward(self, x):
+        image, noise_rate = x
+        noise_embedding = self.sinusoidal_embedding(noise_rate, 16)
+        noise_embedding = self.noiseUpsampling(noise_embedding)
+
+        concat_x = torch.concat((image, noise_embedding), dim=1)
+        super().forward(concat_x)
+
+
+    def sinusoidal_embedding(self, noise, embedding_size=32):
+        """
+        Generates a sinusoidal embedding for a given noise value.
+
+        Args:
+        noise (float or torch.Tensor): Scalar noise value.
+        embedding_size (int): Size of the embedding vector.
+
+        Returns:
+        torch.Tensor: 32x32 tensor of the sinusoidal embedding.
+        """
+        assert isinstance(noise,
+                          (float, torch.Tensor)), "Noise must be a scalar value or a tensor with a single element."
+
+        if isinstance(noise, float):
+            noise = torch.tensor(noise)
+
+        # Ensure noise is a tensor with a single element
+        noise = noise.view(-1)
+
+        # Create an array of frequencies
+        frequencies = torch.exp(torch.linspace(math.log(1.0), math.log(1000.0), embedding_size))
+
+        # Compute the embedding vectors
+        embedding = torch.tensor([]).to(self.device)
+        for freq in frequencies:
+            tmp = []
+            tmp.append(torch.sin(freq * noise))
+            tmp.append(torch.cos(freq * noise))
+            embedding = torch.concat([embedding, tmp], dim=0)
+
+        # Convert the list to a tensor and reshape to 32x32
+        embedding = torch.cat(embedding)
+
+
+        return embedding.to(self.device)
+
+
+
+class DiffusionModel(BaseModel):
+    def __init__(self, device, lr):
+        super().__init__(device, lr)
+        self.normalizer = nn.BatchNorm2d(3)
+        self.network = UNet_Diff(device, lr)
+        self.ema_network = copy.deepcopy(self.network)
+
+        self.optimizer = torch.optim.Adam(self.parameters(), lr= self.learning_rate)
+        self.loss = nn.L1Loss()
+
+
+    def cosine_diffusion_schedule(self, dif_time):
+        signal_rates = torch.cos(dif_time * np.pi / 2)
+        noise_rates = torch.sin(dif_time * np.pi / 2)
+        return noise_rates, signal_rates
+
+    def denoise(self, noisy_images, noise_rates, signal_rates, training):
+        if training:
+            network = self.network
+        else:
+            network = self.ema_network
+
+        pred_noises = network([noisy_images, noise_rates]) # network get noisy image with noise rates and predict the noise
+        pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates
+
+        return pred_noises, pred_images
+
+    def forward(self, x):
+
+        pass
+
+    def Train(self, epoch, dataloader):
+        self.train()
+        for i, (x, y) in enumerate(dataloader):
+            x = x.to(self.device)
+            y = y.to(self.device)
+
+            x = self.normalizer(x) # normalize images
+
+            # initiate noises
+            noises = torch.randn([x.shape[2], x.shape[3]]).to(self.device)
+            batch_size = x.shape[0]
+            diff_time = torch.rand((batch_size, 1, 1, 1)).to(self.device)
+            noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
+
+            # create noisy image
+            noisy_images = signal_rates * x + noise_rates * noises
+
+            # predict noise by using noisy image and noise rates
+            pred_noises, pred_images = self.denoise(noisy_images, noise_rates, signal_rates, training=True)
+
+            # calculate the noise loss ( -> prediction of noise is our goal )
+            noise_loss = self.loss(pred_noises, noises)
+
+            noise_loss.backward()
+            self.optimizer.step()
+
+            for weight, ema_weight in zip(self.network.parameters(), self.ema_network.parameters()):
+                ema_weight.data = 0.999 * ema_weight.data + (1 - 0.999) * weight.data
+
+
+
+
+        pass
+
+
 class UpBlock(BaseModel):
     def __init__(self,in_dim, out_dim, concatList=None, device=None, lr=0):
         super().__init__(device, lr)
@@ -484,12 +599,15 @@ class DownBlock(BaseModel):
 
 
 class ResidualBlock(BaseModel):
+    # model which has skip connection for gradient vanishing
     def __init__(self, in_dim, out_dim, device = None, lr = 0):
         super().__init__(device, lr)
         self.in_dim = in_dim
         self.out_dim = out_dim
+
+        self.pixelwiseConv = nn.Conv2d(in_dim, out_dim, kernel_size=1) # revise the channel of input image
+
         self.normalization = nn.BatchNorm2d(out_dim)
-        self.pixelwiseConv = nn.Conv2d(in_dim, out_dim, kernel_size=1)
         self.network = nn.Sequential(
             nn.Conv2d(out_dim, out_dim, kernel_size= 3, padding = 1),
             nn.SiLU(),
