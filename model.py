@@ -226,11 +226,6 @@ class DCGAN(BaseModel):
             nn.LeakyReLU(0.2),
             nn.Conv2d(512, 1, 4, 1, 0), # 4 -> 1
             nn.Sigmoid(),
-            #nn.Conv2d(128, 256, 4, 1,  0), # 4 -> 1
-            #nn.BatchNorm2d(256),
-            #nn.LeakyReLU(0.2),
-            #nn.Conv2d(256, 1, 1, 1, 0),
-            #nn.Sigmoid(),
         ).to(self.device)
 
         self.generator = nn.Sequential(
@@ -250,11 +245,6 @@ class DCGAN(BaseModel):
             nn.Dropout(self.dropout),
             nn.ConvTranspose2d(128, 3, 4, 2, 1), # 16 -> 32
             nn.Tanh(),
-            #nn.BatchNorm2d(64),
-            #nn.ReLU(),
-            #nn.Dropout(self.dropout),
-            #nn.ConvTranspose2d(64, 3, 4, 2, 1), ## 32 -> 64
-            #nn.Tanh(),
         ).to(self.device)
         self.generator.apply(self.weights_init)
         self.discriminator.apply(self.weights_init)
@@ -451,64 +441,56 @@ class UNet_Diff(UNet):
     def __init__(self, device, lr):
         super().__init__(device, lr)
         self.down1_res1 = ResidualBlock(4, 16)
-        self.noiseUpsampling = nn.Upsample(scale_factor = 4, mode="nearest")
+        self.SinEmb = SinusoidalPositionalEmbedding(self.device).to(self.device) # positional embedding with time step t
+        #self.noiseUpsampling = nn.Upsample(scale_factor = 4, mode="nearest")
 
+        self.to(self.device)
 
     def forward(self, x):
-        image, noise_rate = x
-        noise_embedding = self.sinusoidal_embedding(noise_rate, 16)
-        noise_embedding = self.noiseUpsampling(noise_embedding)
+        image, t = x
+        image = image.to(self.device)
+        t = t.to(self.device)
+        noise_embedding = self.SinEmb(t, image.shape[2], image.shape[3])
+        noise_embedding = noise_embedding.repeat((image.shape[0], 1, 1, 1))
 
         concat_x = torch.concat((image, noise_embedding), dim=1)
-        super().forward(concat_x)
+        return super().forward(concat_x)
 
 
-    def sinusoidal_embedding(self, noise, embedding_size=32):
+class SinusoidalPositionalEmbedding(nn.Module):
+    def __init__(self, device):
+        self.device = device
+        super(SinusoidalPositionalEmbedding, self).__init__()
+
+    def forward(self, t, height, width):
         """
-        Generates a sinusoidal embedding for a given noise value.
-
-        Args:
-        noise (float or torch.Tensor): Scalar noise value.
-        embedding_size (int): Size of the embedding vector.
-
-        Returns:
-        torch.Tensor: 32x32 tensor of the sinusoidal embedding.
+        t: [batchsize, 1, 1, 1]
         """
-        assert isinstance(noise,
-                          (float, torch.Tensor)), "Noise must be a scalar value or a tensor with a single element."
+        batch_size = t.size(0)
 
-        if isinstance(noise, float):
-            noise = torch.tensor(noise)
+        # Create positional encodings for the given time step
+        position = t.view(batch_size, 1)  # [batchsize, 1]
+        div_term = torch.exp(
+            torch.arange(0, 1, 2).float() * (-torch.log(torch.tensor(10000.0)) / 1)).to(self.device)
+        pos_embedding = torch.zeros(batch_size, 1).to(self.device)
 
-        # Ensure noise is a tensor with a single element
-        noise = noise.view(-1)
+        pos_embedding[:, 0::2] = torch.sin(position * div_term)
+        pos_embedding[:, 1::2] = torch.cos(position * div_term)
 
-        # Create an array of frequencies
-        frequencies = torch.exp(torch.linspace(math.log(1.0), math.log(1000.0), embedding_size))
+        # Reshape and expand to match the target size
+        pos_embedding = pos_embedding.view(batch_size, 1, 1, 1)
+        pos_embedding = pos_embedding.expand(batch_size, 1, height, width)
 
-        # Compute the embedding vectors
-        embedding = torch.tensor([]).to(self.device)
-        for freq in frequencies:
-            tmp = []
-            tmp.append(torch.sin(freq * noise))
-            tmp.append(torch.cos(freq * noise))
-            embedding = torch.concat([embedding, tmp], dim=0)
-
-        # Convert the list to a tensor and reshape to 32x32
-        embedding = torch.cat(embedding)
-
-
-        return embedding.to(self.device)
-
+        return pos_embedding
 
 
 class DiffusionModel(BaseModel):
-    def __init__(self, device, lr):
+    def __init__(self, device, lr, timestep = 1000):
         super().__init__(device, lr)
         self.normalizer = nn.BatchNorm2d(3)
         self.network = UNet_Diff(device, lr)
         self.ema_network = copy.deepcopy(self.network)
-
+        self.timestep = timestep
         self.optimizer = torch.optim.Adam(self.parameters(), lr= self.learning_rate)
         self.loss = nn.L1Loss()
 
@@ -518,84 +500,63 @@ class DiffusionModel(BaseModel):
         noise_rates = torch.sin(dif_time * np.pi / 2)
         return noise_rates, signal_rates
 
-    def denoise(self, noisy_images, noise_rates, signal_rates, training):
+    def denoise(self, t, noisy_images, noise_rates, signal_rates, training):
         if training:
             network = self.network
         else:
             network = self.ema_network
 
-        pred_noises = network([noisy_images, noise_rates]) # network get noisy image with noise rates and predict the noise
+        pred_noises = network.forward([noisy_images, t]) # network get noisy image with noise rates and predict the noise
         pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates
 
         return pred_noises, pred_images
 
     def forward(self, x):
-
         pass
+
+    def generate(self, z):
+        noise = z
+        for t in range(0, self.timestep):
+            diff_time = torch.tensor([[[[t/ self.timestep]]]])
+            noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
+            pred_noise, noise = self.denoise(diff_time, noise, noise_rates, signal_rates, training=False)
+
+        return noise
 
     def Train(self, epoch, dataloader):
         self.train()
-        for i, (x, y) in enumerate(dataloader):
-            x = x.to(self.device)
-            y = y.to(self.device)
+        for e in range(0, epoch):
+            for i, (x, y) in enumerate(dataloader):
+                x = x.to(self.device)
+                y = y.to(self.device)
 
-            x = self.normalizer(x) # normalize images
+                x = self.normalizer(x) # normalize images
 
-            # initiate noises
-            noises = torch.randn([x.shape[2], x.shape[3]]).to(self.device)
-            batch_size = x.shape[0]
-            diff_time = torch.rand((batch_size, 1, 1, 1)).to(self.device)
-            noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
+                # initiate noises
+                noises = torch.randn([x.shape[2], x.shape[3]]).to(self.device)
+                batch_size = x.shape[0]
+                #diff_time = torch.rand((batch_size, 1, 1, 1)).to(self.device)
+                diff_time = torch.tensor([[[[(i + (e * len(dataloader))) / len(dataloader) * e]]]]).to(self.device)
+                diff_time = diff_time.repeat((1,1,1,1))
+                noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
 
-            # create noisy image
-            noisy_images = signal_rates * x + noise_rates * noises
+                # create noisy image
+                noisy_images = signal_rates * x + noise_rates * noises
 
-            # predict noise by using noisy image and noise rates
-            pred_noises, pred_images = self.denoise(noisy_images, noise_rates, signal_rates, training=True)
+                # predict noise by using noisy image and noise rates
+                pred_noises, pred_images = self.denoise(diff_time, noisy_images, noise_rates, signal_rates, training=True)
 
-            # calculate the noise loss ( -> prediction of noise is our goal )
-            noise_loss = self.loss(pred_noises, noises)
+                # calculate the noise loss ( -> prediction of noise is our goal )
+                noise_loss = self.loss(pred_noises, noises)
 
-            noise_loss.backward()
-            self.optimizer.step()
+                noise_loss.backward()
+                self.optimizer.step()
 
-            for weight, ema_weight in zip(self.network.parameters(), self.ema_network.parameters()):
-                ema_weight.data = 0.999 * ema_weight.data + (1 - 0.999) * weight.data
+                if i % 100 == 0:
+                    print(f"[epoch : {e} , iteration : {i} / {len(dataloader)}] ..> train loss : {noise_loss} ")
 
-
-
-
-        pass
-
-
-class UpBlock(BaseModel):
-    def __init__(self,in_dim, out_dim, concatList=None, device=None, lr=0):
-        super().__init__(device, lr)
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.upSampling = nn.UpsamplingBilinear2d(2)
-        self.Res1 = ResidualBlock(in_dim, (in_dim + out_dim) / 2)
-        self.Res2 = ResidualBlock((in_dim + out_dim) / 2 , out_dim)
-
-    def forward(self, x):
-        scaled_x = self.upSampling(x)
-        out = self.Res1(scaled_x)
-        out2 = self.Res2(out)
-        return out2
-
-class DownBlock(BaseModel):
-    def __init__(self, in_dim, out_dim, device=None, lr=0):
-        super().__init__(device,lr)
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.Res1 = ResidualBlock(in_dim, (out_dim + in_dim) / 2)
-        self.Res2 = ResidualBlock((out_dim + in_dim)/2, out_dim)
-        self.avgPool = nn.AvgPool2d(2)
-
-    def forward(self, x):
-        out = self.Res1(x)
-        out2 = self.Res2(out)
-        return self.avgPool(out2)
+                for weight, ema_weight in zip(self.network.parameters(), self.ema_network.parameters()):
+                    ema_weight.data = 0.999 * ema_weight.data + (1 - 0.999) * weight.data
 
 
 class ResidualBlock(BaseModel):
@@ -621,7 +582,7 @@ class ResidualBlock(BaseModel):
         norm_x = self.normalization(x)
         out = self.network(norm_x)
         out = self.relu(out)
-        return out + x
+        return out + x # residual
 
 
 

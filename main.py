@@ -5,8 +5,8 @@ from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 import os
 
-batch_size = 128 # batch_size 지정
-epoch = 10
+batch_size = 4 # batch_size 지정
+epoch = 1
 num_workers = 0
 learning_rate = 0.0002
 image_size = 64
@@ -131,7 +131,8 @@ while True:
         break
     G_model.to('cpu')
     G_model.eval()
-    noise = torch.randn(1, 100)
+    #noise = torch.randn(1, 100)
+    noise = torch.randn((1,3,64,64))
     image = G_model.generate(noise)
     G_model.saveImage(image, "result", f"{loop}th generated image.jpg")
     G_model.showImage(image)
