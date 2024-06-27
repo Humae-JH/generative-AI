@@ -121,20 +121,36 @@ def VAE_train():
 #Unet.Train(epoch, train_loader)
 G_model = DiffusionModel(device, learning_rate)
 G_model.to(device)
-G_model.Train(epoch, dataloader=train_loader)
 
+modelPath = "Diff_model.pth"
+if os.path.isfile(modelPath):
+    tmp = input(f"{modelPath} has been found would you want to load ? [y / n]...>")
+    if tmp == 'y':
+        G_model.loadState(G_model.network, modelPath)
+        G_model.loadState(G_model.ema_network, modelPath)
+    else:
+        G_model.Train(epoch, dataloader=train_loader)
+        G_model.saveState(G_model.ema_network, "Diff_model.pth")
+
+
+
+
+
+
+#G_model.cpu()
+#G_model.setDevice("cpu")
+G_model.eval()
 
 loop = 0
 while True:
     command = input("quit : q // else : generate image ...>")
     if command == 'q':
         break
-    G_model.to('cpu')
-    G_model.eval()
+
     #noise = torch.randn(1, 100)
-    noise = torch.randn((1,3,64,64))
+    noise = torch.randn((1,3,64,64)).to(device)
     image = G_model.generate(noise)
     G_model.saveImage(image, "result", f"{loop}th generated image.jpg")
-    G_model.showImage(image)
+    #G_model.showImage(image)
     loop += 1
 

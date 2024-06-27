@@ -492,7 +492,7 @@ class DiffusionModel(BaseModel):
         self.ema_network = copy.deepcopy(self.network)
         self.timestep = timestep
         self.optimizer = torch.optim.Adam(self.parameters(), lr= self.learning_rate)
-        self.loss = nn.L1Loss()
+        self.loss = nn.MSELoss()
 
 
     def cosine_diffusion_schedule(self, dif_time):
@@ -502,9 +502,9 @@ class DiffusionModel(BaseModel):
 
     def denoise(self, t, noisy_images, noise_rates, signal_rates, training):
         if training:
-            network = self.network
+            network = self.network.to(self.device)
         else:
-            network = self.ema_network
+            network = self.ema_network.to(self.device)
 
         pred_noises = network.forward([noisy_images, t]) # network get noisy image with noise rates and predict the noise
         pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates
@@ -517,7 +517,7 @@ class DiffusionModel(BaseModel):
     def generate(self, z):
         noise = z
         for t in range(0, self.timestep):
-            diff_time = torch.tensor([[[[t/ self.timestep]]]])
+            diff_time = torch.tensor([[[[t/ self.timestep]]]]).to(self.device)
             noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
             pred_noise, noise = self.denoise(diff_time, noise, noise_rates, signal_rates, training=False)
 
@@ -558,6 +558,8 @@ class DiffusionModel(BaseModel):
                 for weight, ema_weight in zip(self.network.parameters(), self.ema_network.parameters()):
                     ema_weight.data = 0.999 * ema_weight.data + (1 - 0.999) * weight.data
 
+    def setDevice(self, device):
+        self.device = device
 
 class ResidualBlock(BaseModel):
     # model which has skip connection for gradient vanishing
