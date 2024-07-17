@@ -6,9 +6,9 @@ from torchvision import datasets, transforms
 import os
 
 batch_size = 4 # batch_size 지정
-epoch = 1
+epoch = 5
 num_workers = 0
-learning_rate = 0.0002
+learning_rate = 0.00005
 image_size = 64
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"device : {device}")
@@ -148,7 +148,7 @@ while True:
         break
 
     #noise = torch.randn(1, 100)
-    noise = torch.randn((1,3,64,64)).to(device)
+    noise = torch.rand((1,3,64,64)).to(device)
     image = G_model.generate(noise)
     G_model.saveImage(image, "result", f"{loop}th generated image.jpg")
     #G_model.showImage(image)

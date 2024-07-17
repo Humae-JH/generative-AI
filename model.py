@@ -41,12 +41,12 @@ class BaseModel(nn.Module):
         vutils.save_image(img_grid, save_path, normalize=True)
         return
 
-    def showImage(self, images):
+    def showImage(self, images, title = "image"):
         img_grid = vutils.make_grid(images, padding=2, normalize=True)
         # Show the images
         plt.figure(figsize=(8, 8))
         plt.axis('off')
-        plt.title(f'Generated Images')
+        plt.title(title)
         plt.imshow(np.transpose(img_grid, (1, 2, 0)))
         plt.show()
 
@@ -414,7 +414,6 @@ class UNet(BaseModel):
         out = torch.cat((skip1, out), 1)
         out = self.up3_res1(out)
         out = self.up3_res2(out)
-
         return out
 
 
@@ -530,24 +529,31 @@ class DiffusionModel(BaseModel):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
-                x = self.normalizer(x) # normalize images
-
+                #x = self.normalizer(x) # normalize images
+                #x = torch.nn.functional.normalize(x, dim=1)
                 # initiate noises
-                noises = torch.randn([x.shape[2], x.shape[3]]).to(self.device)
+                noises = torch.nn.functional.normalize(torch.randn([x.shape[2], x.shape[3]]), dim=0).to(self.device)
+
                 batch_size = x.shape[0]
-                #diff_time = torch.rand((batch_size, 1, 1, 1)).to(self.device)
-                diff_time = torch.tensor([[[[(i + (e * len(dataloader))) / len(dataloader) * e]]]]).to(self.device)
+                diff_time = torch.rand((1, 1, 1, 1)).to(self.device)
+                #diff_time = torch.tensor([[[[(i + ((e+1) * len(dataloader))) / len(dataloader) * (e+1)]]]]).to(self.device)
                 diff_time = diff_time.repeat((1,1,1,1))
                 noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
 
                 # create noisy image
-                noisy_images = signal_rates * x + noise_rates * noises
+                noisy_images = signal_rates * x.detach() + noise_rates * noises
 
                 # predict noise by using noisy image and noise rates
                 pred_noises, pred_images = self.denoise(diff_time, noisy_images, noise_rates, signal_rates, training=True)
-
+                if i % 5000 == 0:
+                    #pass
+                    self.showImage(noises.to('cpu'), 'noises_image')
+                    self.showImage(x.to('cpu'), 'original_images')
+                    self.showImage(noisy_images.to('cpu'), f'diff_time : {diff_time} ,noisy_images noise_rates:{noise_rates} ')
+                    self.showImage(pred_noises.to('cpu'), 'pred_noises')
+                    self.showImage(pred_images.to('cpu'), 'pred_images')
                 # calculate the noise loss ( -> prediction of noise is our goal )
-                noise_loss = self.loss(pred_noises, noises)
+                noise_loss = self.loss(pred_noises, noises * noise_rates)
 
                 noise_loss.backward()
                 self.optimizer.step()
