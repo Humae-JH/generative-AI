@@ -4,28 +4,17 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 import os
+from dataLoader import *
 
 batch_size = 4 # batch_size 지정
 epoch = 5
 num_workers = 0
 learning_rate = 0.00005
-image_size = 64
+image_size = 32
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"device : {device}")
 
-dataset = datasets.CelebA(root="./data/celeba",
-                      split="train",
-                      download=True,
-                      transform=transforms.Compose([
-                          transforms.Resize(image_size),
-                          transforms.CenterCrop(image_size),
-                          transforms.ToTensor(),
-                          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                      ]))
 
-# Create the dataloader
-celebDataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                         shuffle=True, num_workers=num_workers)
 
 transform = transforms.Compose([
     transforms.ToTensor(),
@@ -33,25 +22,9 @@ transform = transforms.Compose([
     transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
 ])
 
-train_dataset = datasets.CIFAR10(root='./data/', train=True, download=True, transform=transform)
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size= batch_size, shuffle=True)
 
-"""train_data = datasets.FashionMNIST(root='data',
-                                   train=True,        # 학습용 데이터셋 설정(True)
-                                   download=True,
-                                   transform=transform
-                                  )
+train_loader = CIFAR10(transform, batch_size, num_workers)
 
-train_loader = torch.utils.data.DataLoader(train_data,
-                                           batch_size=batch_size,
-                                           shuffle=True,
-                                           num_workers=num_workers)"""
-
-test_data = datasets.CIFAR10(root='./data/', train=False, download=True, transform=transform)
-test_loader = torch.utils.data.DataLoader(test_data,
-                                          batch_size=batch_size,
-                                          shuffle=False,
-                                          num_workers=num_workers)
 
 #VAE = model.VAE(device, learning_rate)
 
@@ -62,7 +35,7 @@ test_loader = torch.utils.data.DataLoader(test_data,
 
 def Gan_Train():
 
-    G_model = model.DCGAN(device, learning_rate, batch_size)
+    G_model = DCGAN(device, learning_rate, batch_size)
 
     D_weight_path = "./DCGAN_Discriminator.pth"
     G_weight_path = "./DCGAN_Generator.pth"
@@ -82,7 +55,7 @@ def Gan_Train():
         else:
             pass
 
-    G_model.Train(epoch, celebDataloader)
+    G_model.Train(epoch, train_loader)
 
     G_model.saveState(G_model.discriminator, "DCGAN_Discriminator.pth")
     G_model.saveState(G_model.generator, "DCGAN_Generator.pth")
@@ -90,7 +63,7 @@ def Gan_Train():
     return G_model
 
 def VAE_train():
-    G_model = model.VAE(device, learning_rate)
+    G_model = VAE(device, learning_rate)
     E_weight_path = "./VAE_Encoder.pth"
     D_weight_path = "./VAE_Decoder.pth"
 
@@ -108,7 +81,7 @@ def VAE_train():
         else:
             pass
 
-    G_model.Train(epoch, celebDataloader)
+    G_model.Train(epoch, train_loader)
 
     G_model.saveState(G_model.encoder, "VAE_Encoder.pth")
     G_model.saveState(G_model.decoder, "VAE_Decoder.pth")

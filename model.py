@@ -532,13 +532,18 @@ class DiffusionModel(BaseModel):
                 #x = self.normalizer(x) # normalize images
                 #x = torch.nn.functional.normalize(x, dim=1)
                 # initiate noises
-                noises = torch.nn.functional.normalize(torch.randn([x.shape[2], x.shape[3]]), dim=0).to(self.device)
+                noises = torch.nn.functional.normalize(torch.randn([1, 3 , x.shape[2], x.shape[3]]), dim=1).to(self.device)
 
                 batch_size = x.shape[0]
-                diff_time = torch.rand((1, 1, 1, 1)).to(self.device)
+                """diff_time = torch.rand((1, 1, 1, 1)).to(self.device)
                 #diff_time = torch.tensor([[[[(i + ((e+1) * len(dataloader))) / len(dataloader) * (e+1)]]]]).to(self.device)
                 diff_time = diff_time.repeat((1,1,1,1))
-                noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
+                noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)"""
+
+                # beta need to be fixed!
+                diff_time = torch.tensor(i / len(dataloader)).float().reshape(1,1,1,1).to(self.device)
+                noise_rates = diff_time
+                signal_rates = 1 - diff_time
 
                 # create noisy image
                 noisy_images = signal_rates * x.detach() + noise_rates * noises
