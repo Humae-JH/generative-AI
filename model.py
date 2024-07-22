@@ -10,8 +10,9 @@ import numpy as np
 import copy
 import numpy as np
 import math
-
-
+import random
+import torch.nn.functional as F
+from einops import rearrange, repeat, reduce, pack, unpack
 class BaseModel(nn.Module):
     def __init__(self, device, lr):
         super().__init__()
@@ -69,9 +70,11 @@ class BaseModel(nn.Module):
     def loadState(self, model, path):
         if ".pth" not in path:
             model = path + ".pth"
-        model.load_state_dict(torch.load(path, map_location=self.device)).to(self.device)
+        model.load_state_dict(torch.load(path, map_location=self.device))
         print(f"{model}'s weight has been loaded [{path}]")
         return
+
+
 
 class VAEEncoder(BaseModel):
     def __init__(self, device, lr):
@@ -373,7 +376,7 @@ class UNet(BaseModel):
 
         self.optimizer = torch.optim.Adam(self.parameters(), self.learning_rate)
         self.loss = nn.L1Loss()
-
+        self.normalizer = nn.LayerNorm([3,32,32])
     def forward(self,x):
         # Downblock 1
         out = self.down1_res1(x)
@@ -414,6 +417,7 @@ class UNet(BaseModel):
         out = torch.cat((skip1, out), 1)
         out = self.up3_res1(out)
         out = self.up3_res2(out)
+        out = self.normalizer(out)
         return out
 
 
@@ -484,20 +488,35 @@ class SinusoidalPositionalEmbedding(nn.Module):
 
 
 class DiffusionModel(BaseModel):
-    def __init__(self, device, lr, timestep = 1000):
+    def __init__(self, device, lr, T = 1000):
         super().__init__(device, lr)
         self.normalizer = nn.BatchNorm2d(3)
         self.network = UNet_Diff(device, lr)
         self.ema_network = copy.deepcopy(self.network)
-        self.timestep = timestep
         self.optimizer = torch.optim.Adam(self.parameters(), lr= self.learning_rate)
-        self.loss = nn.MSELoss()
+        self.loss = nn.L1Loss()
+        self.T = T
 
 
     def cosine_diffusion_schedule(self, dif_time):
         signal_rates = torch.cos(dif_time * np.pi / 2)
         noise_rates = torch.sin(dif_time * np.pi / 2)
         return noise_rates, signal_rates
+
+    def sigmoid_beta_schedule(self,timesteps, start=-3, end=3, tau=1, clamp_min=1e-5):
+        """
+        sigmoid schedule
+        proposed in https://arxiv.org/abs/2212.11972 - Figure 8
+        better for images > 64x64, when used during training
+        """
+        steps = timesteps + 1
+        t = torch.linspace(0, timesteps, steps, dtype=torch.float64) / timesteps
+        v_start = torch.tensor(start / tau).sigmoid()
+        v_end = torch.tensor(end / tau).sigmoid()
+        alphas_cumprod = (-((t * (end - start) + start) / tau).sigmoid() + v_end) / (v_end - v_start)
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        return torch.clip(betas, 0, 0.999)
 
     def denoise(self, t, noisy_images, noise_rates, signal_rates, training):
         if training:
@@ -515,9 +534,10 @@ class DiffusionModel(BaseModel):
 
     def generate(self, z):
         noise = z
-        for t in range(0, self.timestep):
-            diff_time = torch.tensor([[[[t/ self.timestep]]]]).to(self.device)
-            noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)
+        for t in range(0, self.T):
+            diff_time = torch.tensor([[[[t/ self.T]]]]).to(self.device)
+            signal_rates = torch.tensor((self.T-diff_time) / float(self.T))
+            noise_rates = 1 - signal_rates
             pred_noise, noise = self.denoise(diff_time, noise, noise_rates, signal_rates, training=False)
 
         return noise
@@ -540,17 +560,30 @@ class DiffusionModel(BaseModel):
                 diff_time = diff_time.repeat((1,1,1,1))
                 noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)"""
 
+                diff_time = torch.randint(1,self.T,[1,1,1,1]).to(self.device)
+
+                #signal_rates = torch.sqrt(torch.tensor(1 - (diff_time * (0.001) / self.T)))
+                #noise_rates = torch.sqrt(torch.tensor(diff_time * (0.001) / self.T))
+                signal_rates = torch.tensor((self.T - diff_time) / float(self.T))
+                noise_rates = 1 - signal_rates
+
                 # beta need to be fixed!
-                diff_time = torch.tensor(i / len(dataloader)).float().reshape(1,1,1,1).to(self.device)
+                """diff_time = torch.tensor(i / len(dataloader)).float().reshape(1,1,1,1).to(self.device)
                 noise_rates = diff_time
-                signal_rates = 1 - diff_time
+                signal_rates = 1 - diff_time"""
+
+                """diff_time = random.randint(1, self.T)
+                beta_t = diff_time * (0.02-0.0001) / self.T + 0.0001"""
+
+
+
 
                 # create noisy image
                 noisy_images = signal_rates * x.detach() + noise_rates * noises
 
                 # predict noise by using noisy image and noise rates
                 pred_noises, pred_images = self.denoise(diff_time, noisy_images, noise_rates, signal_rates, training=True)
-                if i % 5000 == 0:
+                if (i+1) % (len(dataloader) - 1) == 0:
                     #pass
                     self.showImage(noises.to('cpu'), 'noises_image')
                     self.showImage(x.to('cpu'), 'original_images')
@@ -558,7 +591,9 @@ class DiffusionModel(BaseModel):
                     self.showImage(pred_noises.to('cpu'), 'pred_noises')
                     self.showImage(pred_images.to('cpu'), 'pred_images')
                 # calculate the noise loss ( -> prediction of noise is our goal )
-                noise_loss = self.loss(pred_noises, noises * noise_rates)
+                #noise_loss = self.loss(pred_noises, noises)
+                noise_loss = F.mse_loss(pred_noises, noises * noise_rates, reduction='none')
+                noise_loss = reduce(noise_loss, 'b ... -> b', 'mean').sum()
 
                 noise_loss.backward()
                 self.optimizer.step()
@@ -571,6 +606,12 @@ class DiffusionModel(BaseModel):
 
     def setDevice(self, device):
         self.device = device
+        self.network.to(torch.device(self.device))
+        self.network.SinEmb.to(torch.device(self.device))
+        self.network.device = self.device
+        self.ema_network.to(torch.device(self.device))
+        self.ema_network.SinEmb.to(torch.device(self.device))
+        self.ema_network.device = self.device
 
 class ResidualBlock(BaseModel):
     # model which has skip connection for gradient vanishing
@@ -595,7 +636,7 @@ class ResidualBlock(BaseModel):
         norm_x = self.normalization(x)
         out = self.network(norm_x)
         out = self.relu(out)
-        return out + x # residual
+        return out + norm_x # residual
 
 
 
