@@ -454,7 +454,7 @@ class UNet_Diff(UNet):
         image = image.to(self.device)
         t = t.to(self.device)
         noise_embedding = self.SinEmb(t, image.shape[2], image.shape[3])
-        noise_embedding = noise_embedding.repeat((image.shape[0], 1, 1, 1))
+        #noise_embedding = noise_embedding.repeat((1, 1, 1, 1))
 
         concat_x = torch.concat((image, noise_embedding), dim=1)
         return super().forward(concat_x)
@@ -496,8 +496,24 @@ class DiffusionModel(BaseModel):
         self.optimizer = torch.optim.Adam(self.parameters(), lr= self.learning_rate)
         self.loss = nn.L1Loss()
         self.T = T
+        diffusion_times = [x/self.T for x in range(self.T)]
+        linear_noise_rates , linear_signal_rates = self.Linear_diffusion_schedule(diffusion_times)
+        self.linear_noise_rates = linear_noise_rates
+        self.linear_signal_rates = linear_signal_rates
+
+    def getRates(self, diff_time):
+        return self.linear_noise_rates[diff_time], self.linear_noise_rates[diff_time]
 
 
+    def Linear_diffusion_schedule(self, diff_time):
+        min_rate = 0.0001
+        max_rate = 0.02
+        betas = min_rate + torch.tensor(diff_time) * (max_rate - min_rate)
+        alphas = 1 - betas
+        alpha_bars = torch.cumprod(alphas, dim=0)
+        signal_rates = alpha_bars
+        noise_rates = 1 - alpha_bars
+        return noise_rates, signal_rates
     def cosine_diffusion_schedule(self, dif_time):
         signal_rates = torch.cos(dif_time * np.pi / 2)
         noise_rates = torch.sin(dif_time * np.pi / 2)
@@ -533,14 +549,41 @@ class DiffusionModel(BaseModel):
         pass
 
     def generate(self, z):
+        """ Image Generation Progress
+        1. To remove noise from x_t and generate x_t-1, we need to process following progress
+            1.1 Predict noise by using x_t -> Diffusion model might learn the noise from x0 to xt with timestep t
+            1.2 Estimate x_0 by removing noise ( x_0 = x_t - predicted noise )
+            1.3 With x_t and beta(noise schedule), we can add the noise to x_0 and by doing this, we get a x_t-1
+            1.4 Repeat 1.1 - 1.3 progress until t = 0
+        """
         noise = z
-        for t in range(0, self.T):
-            diff_time = torch.tensor([[[[t/ self.T]]]]).to(self.device)
-            signal_rates = torch.tensor((self.T-diff_time) / float(self.T))
-            noise_rates = 1 - signal_rates
-            pred_noise, noise = self.denoise(diff_time, noise, noise_rates, signal_rates, training=False)
+        next_x = z
+        for t in range(self.T-1, -1, -1):
+            diff_time = torch.tensor(t).reshape(1,1,1,1)
+            noise_rates , signal_rates = self.getRates(diff_time)
 
-        return noise
+            # predict noise added in timestep t
+            pred_noise, _ = self.denoise(diff_time, next_x, noise_rates, signal_rates, training=False)
+
+            # Estimate x_0 by removing noise
+            est_x_0 = next_x - pred_noise
+            if t % 100 == 0:
+                self.showImage(next_x, f"{t} / {self.T} reverse image")
+
+            if t > 0:
+                # get x_t-1 by adding noise
+                next_noise_rates , next_signal_rates = self.getRates(diff_time-1)
+                next_x = next_signal_rates * est_x_0 + next_noise_rates * noise
+            else:
+                est_x_0 = next_x - pred_noise
+                break
+
+
+
+            # To
+
+        return est_x_0
+
 
     def Train(self, epoch, dataloader):
         self.train()
@@ -560,22 +603,21 @@ class DiffusionModel(BaseModel):
                 diff_time = diff_time.repeat((1,1,1,1))
                 noise_rates, signal_rates = self.cosine_diffusion_schedule(diff_time)"""
 
-                diff_time = torch.randint(1,self.T,[1,1,1,1]).to(self.device)
+                diff_time = torch.randint(batch_size,self.T,[batch_size,1,1,1]).to(self.device)
+
+                noise_rates, signal_rates = self.getRates(diff_time)
 
                 #signal_rates = torch.sqrt(torch.tensor(1 - (diff_time * (0.001) / self.T)))
                 #noise_rates = torch.sqrt(torch.tensor(diff_time * (0.001) / self.T))
-                signal_rates = torch.tensor((self.T - diff_time) / float(self.T))
-                noise_rates = 1 - signal_rates
+                #signal_rates = torch.tensor((self.T - diff_time) / float(self.T))
+                #noise_rates = 1 - signal_rates
 
                 # beta need to be fixed!
-                """diff_time = torch.tensor(i / len(dataloader)).float().reshape(1,1,1,1).to(self.device)
-                noise_rates = diff_time
-                signal_rates = 1 - diff_time"""
+                #diff_time = torch.tensor(i / len(dataloader)).float().reshape(1,1,1,1).to(self.device)
+                #diff_time = torch.rand((batch_size, 1, 1, 1)).to(self.device)
 
-                """diff_time = random.randint(1, self.T)
-                beta_t = diff_time * (0.02-0.0001) / self.T + 0.0001"""
-
-
+                #noise_rates = diff_time
+                #signal_rates = 1 - diff_time
 
 
                 # create noisy image
@@ -592,7 +634,7 @@ class DiffusionModel(BaseModel):
                     self.showImage(pred_images.to('cpu'), 'pred_images')
                 # calculate the noise loss ( -> prediction of noise is our goal )
                 #noise_loss = self.loss(pred_noises, noises)
-                noise_loss = F.mse_loss(pred_noises, noises * noise_rates, reduction='none')
+                noise_loss = F.mse_loss(pred_noises, noises, reduction='none')
                 noise_loss = reduce(noise_loss, 'b ... -> b', 'mean').sum()
 
                 noise_loss.backward()

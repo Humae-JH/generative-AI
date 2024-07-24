@@ -7,7 +7,7 @@ import os
 from dataLoader import *
 
 batch_size = 4 # batch_size 지정
-epoch = 10
+epoch = 0
 num_workers = 0
 learning_rate = 0.00005
 image_size = 32
@@ -104,6 +104,9 @@ if os.path.isfile(modelPath):
     else:
         G_model.Train(epoch, dataloader=train_loader)
         G_model.saveState(G_model.ema_network, "Diff_model.pth")
+else:
+    G_model.Train(epoch, dataloader=train_loader)
+    G_model.saveState(G_model.ema_network, "Diff_model.pth")
 
 
 
