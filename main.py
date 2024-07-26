@@ -7,9 +7,9 @@ import os
 from dataLoader import *
 
 batch_size = 4 # batch_size 지정
-epoch = 0
+epoch = 50
 num_workers = 0
-learning_rate = 0.00005
+learning_rate = 0.0001
 image_size = 32
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"device : {device}")
@@ -19,7 +19,7 @@ print(f"device : {device}")
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Resize(image_size),
-    transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+    transforms.Normalize(mean=(0, 0, 0), std=(1, 1, 1)),
 ])
 
 
@@ -99,8 +99,9 @@ modelPath = "Diff_model.pth"
 if os.path.isfile(modelPath):
     tmp = input(f"{modelPath} has been found would you want to load ? [y / n]...>")
     if tmp == 'y':
-        G_model.loadState(G_model.network, modelPath)
-        G_model.loadState(G_model.ema_network, modelPath)
+        pass
+        #G_model.loadState(G_model.network, modelPath)
+        #G_model.loadState(G_model.ema_network, modelPath)
     else:
         G_model.Train(epoch, dataloader=train_loader)
         G_model.saveState(G_model.ema_network, "Diff_model.pth")
@@ -116,11 +117,12 @@ else:
 #G_model.cpu()
 #G_model.setDevice("cpu")
 
-model = DiffusionModel('cpu',lr=learning_rate)
-model.loadState(model.network, modelPath)
-model.loadState(model.ema_network, modelPath)
+#model = DiffusionModel('cpu',lr=learning_rate)
+#model.loadState(model.network, modelPath)
+#model.loadState(model.ema_network, modelPath)
 
-model.eval()
+#model.eval()
+G_model.eval()
 loop = 0
 while True:
     command = input("quit : q // else : generate image ...>")
@@ -128,8 +130,10 @@ while True:
         break
 
     #noise = torch.randn(1, 100)
-    noise = torch.rand((1,3,image_size,image_size)).cpu()
-    image = model.generate(noise)
+    noise = torch.nn.functional.normalize(torch.randn([1, 3, image_size, image_size]), dim=1).to(device)
+    #noise = torch.normaltorch.rand((1,3,image_size,image_size)).cpu()
+    image = G_model.generate(noise)
+    image = image.detach().cpu()
     G_model.saveImage(image, "result", f"{loop}th generated image.jpg")
     #G_model.showImage(image)
     loop += 1
