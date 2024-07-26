@@ -497,7 +497,7 @@ class DiffusionModel(BaseModel):
         self.loss = nn.L1Loss()
         self.T = T
         diffusion_times = [x/self.T for x in range(self.T)]
-        linear_noise_rates , linear_signal_rates = self.Linear_diffusion_schedule(diffusion_times)
+        linear_noise_rates , linear_signal_rates = self.cosine_diffusion_schedule(diffusion_times)
         self.linear_noise_rates = linear_noise_rates
         self.linear_signal_rates = linear_signal_rates
 
@@ -516,9 +516,12 @@ class DiffusionModel(BaseModel):
         return noise_rates, signal_rates
 
     def cosine_diffusion_schedule(self, dif_time):
-        signal_rates = torch.cos(dif_time * np.pi / 2)
-        noise_rates = torch.sin(dif_time * np.pi / 2)
+        dif_time = torch.tensor(dif_time, dtype=torch.float32)
+        signal_rates = torch.cos(dif_time * torch.pi / 2.)
+        noise_rates = torch.sin(dif_time * torch.pi / 2.)
         return noise_rates, signal_rates
+
+
 
     def sigmoid_beta_schedule(self,timesteps, start=-3, end=3, tau=1, clamp_min=1e-5):
         """
