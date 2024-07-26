@@ -7,7 +7,7 @@ import os
 from dataLoader import *
 
 batch_size = 4 # batch_size 지정
-epoch = 50
+epoch = 0
 num_workers = 0
 learning_rate = 0.0001
 image_size = 32
@@ -25,7 +25,7 @@ transform = transforms.Compose([
 
 train_loader = CIFAR10(transform, batch_size, num_workers)
 
-
+data_mean, data_std = getMeanAndStd(train_loader)
 #VAE = model.VAE(device, learning_rate)
 
 #VAE.Train(epoch, train_loader)
@@ -132,7 +132,7 @@ while True:
     #noise = torch.randn(1, 100)
     noise = torch.nn.functional.normalize(torch.randn([1, 3, image_size, image_size]), dim=1).to(device)
     #noise = torch.normaltorch.rand((1,3,image_size,image_size)).cpu()
-    image = G_model.generate(noise)
+    image = G_model.generate(noise, data_mean, data_std)
     image = image.detach().cpu()
     G_model.saveImage(image, "result", f"{loop}th generated image.jpg")
     #G_model.showImage(image)

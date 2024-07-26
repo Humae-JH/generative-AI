@@ -547,10 +547,23 @@ class DiffusionModel(BaseModel):
 
         return pred_noises, pred_images
 
+    def denormalizer(self, img, data_mean, data_std):
+        R_mean , G_mean, B_mean = data_mean
+        R_std, G_std, B_std = data_std
+        R_mean_array = torch.tensor(R_mean).repeat([img.shape[0],1,img.shape[2], img.shape[3]])
+        G_mean_array = torch.tensor(G_mean).repeat([img.shape[0],1,img.shape[2], img.shape[3]])
+        B_mean_array = torch.tensor(B_mean).repeat([img.shape[0],1,img.shape[2], img.shape[3]])
+
+        img[0][0] = img[0][0] * R_std + R_mean_array
+        img[0][1] = img[0][1] * G_std + G_mean_array
+        img[0][2] = img[0][2] * B_std + B_mean_array
+
+        return img
+
     def forward(self, x):
         pass
 
-    def generate(self, z):
+    def generate(self, z, data_mean, data_std):
         """ Image Generation Progress
         1. To remove noise from x_t and generate x_t-1, we need to process following progress
             1.1 Predict noise by using x_t -> Diffusion model might learn the noise from x0 to xt with timestep t
@@ -560,6 +573,7 @@ class DiffusionModel(BaseModel):
         """
         noise = z
         next_x = z
+
         for t in range(self.T-1, -1, -1):
             diff_time = torch.tensor(t).reshape(1,1,1,1)
             noise_rates , signal_rates = self.getRates(diff_time)
@@ -572,6 +586,7 @@ class DiffusionModel(BaseModel):
             est_x_0 = next_x - pred_noise
             if t % 100 == 0:
                 img = next_x.detach().cpu()
+                img = self.denormalizer(img, data_mean, data_std)
                 self.showImage(img, f"{t} / {self.T} reverse image")
 
             if t > 0:
@@ -585,8 +600,9 @@ class DiffusionModel(BaseModel):
                 break
 
 
-
-            # To
+        # need to denormalize
+        est_x_0 = self.denormalizer(est_x_0, data_mean, data_std)
+        est_x_0 = torch.clip(est_x_0, 0, 1)
 
         return est_x_0
 

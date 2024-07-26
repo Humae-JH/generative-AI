@@ -1,6 +1,24 @@
 from torchvision import datasets, transforms
 import torch
 
+def getMeanAndStd(trainloader):
+    mean = 0.0
+    std = 0.0
+    num_batches = len(trainloader)
+
+    # Iterate through the dataset
+    for images, _ in trainloader:
+        # Flatten the images to get each pixel value in a batch
+        images = images.view(images.size(0), images.size(1), -1)
+        # Calculate mean and std
+        mean += images.mean(2).sum(0) / images.shape[0]
+        std += images.std(2).sum(0) / images.shape[0]
+
+    mean = mean / len(trainloader)
+    std = std / len(trainloader)
+
+    return mean, std
+
 def CelebA(transforms, batch_size, num_workers):
     dataset = datasets.CelebA(root="./data/celeba",
                               split="train",
