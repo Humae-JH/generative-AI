@@ -453,7 +453,7 @@ class UNet_Diff(UNet):
         image, t = x
         image = image.to(self.device)
         t = t.to(self.device)
-        noise_embedding = self.SinEmb(t, image.shape[2], image.shape[3])
+        noise_embedding = self.SinEmb(t, image.shape[2], image.shape[3]).detach()
         #noise_embedding = noise_embedding.repeat((1, 1, 1, 1))
 
         concat_x = torch.concat((image, noise_embedding), dim=1)
@@ -538,15 +538,15 @@ class DiffusionModel(BaseModel):
         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
         return torch.clip(betas, 0, 0.999)
 
-    def denoise(self, t, noisy_images, noise_rates, signal_rates, training):
+    def denoise(self, t, noisy_images, noise_rates, signal_rates):
         """if training:
             network = self.network.to(self.device)
         else:
             network = self.ema_network.to(self.device)"""
         network = self.network.to(self.device)
 
-        pred_noises = network.forward([noisy_images, t]) # network get noisy image with noise rates and predict the noise
-        pred_images = noisy_images - noise_rates * pred_noises
+        pred_noises = network.forward([noisy_images, noise_rates**2]) # network get noisy image with noise rates and predict the noise
+        pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates
 
         return pred_noises, pred_images
 
@@ -616,13 +616,12 @@ class DiffusionModel(BaseModel):
             for i, (x, y) in enumerate(dataloader):
                 x = x.to(self.device)
                 y = y.to(self.device)
-
+                batch_size = x.shape[0]
                 #x = self.normalizer(x) # normalize images
                 #x = torch.nn.functional.normalize(x, dim=1)
                 # initiate noises
-                noises = torch.nn.functional.normalize(torch.randn([1, 3 , x.shape[2], x.shape[3]]), dim=1).to(self.device)
-
-                batch_size = x.shape[0]
+                noises = torch.nn.functional.normalize(torch.randn([batch_size, 3 , x.shape[2], x.shape[3]]), dim=1).to(self.device)
+                #noise_std = noises.view(batch_size,3,-1).std(2).view(batch_size,-1).std(1).view(batch_size,-1)
                 """diff_time = torch.rand((1, 1, 1, 1)).to(self.device)
                 #diff_time = torch.tensor([[[[(i + ((e+1) * len(dataloader))) / len(dataloader) * (e+1)]]]]).to(self.device)
                 diff_time = diff_time.repeat((1,1,1,1))
@@ -651,7 +650,7 @@ class DiffusionModel(BaseModel):
                 noisy_images = signal_rates * x.detach() + noise_rates * noises
 
                 # predict noise by using noisy image and noise rates
-                pred_noises, pred_images = self.denoise(diff_time, noisy_images, noise_rates, signal_rates, training=True)
+                pred_noises, pred_images = self.denoise(diff_time, noisy_images, noise_rates, signal_rates)
                 """if (i+1) % (len(dataloader) - 1) == 0:
                     #pass
                     self.showImage(noises.to('cpu'), 'noises_image')

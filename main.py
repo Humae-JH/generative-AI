@@ -6,8 +6,8 @@ from torchvision import datasets, transforms
 import os
 from dataLoader import *
 
-batch_size = 4 # batch_size 지정
-epoch = 0
+batch_size = 64 # batch_size 지정
+epoch = 50
 num_workers = 0
 learning_rate = 0.0001
 image_size = 32
