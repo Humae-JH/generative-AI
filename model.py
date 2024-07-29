@@ -706,6 +706,82 @@ class ResidualBlock(BaseModel):
         out = self.relu(out)
         return out + norm_x # residual
 
+class AttentionLayer(BaseModel):
+    def __init__(self, d_in, d_v, d_k = 100, device = 'cpu', lr = 0.0001):
+        super().__init__(device, lr)
+        """
+
+        :param d_in: input vector dimension
+        :param d_v: value vector dimension
+        :param d_k: key vector dimensionn
+
+        output dimension must be d_v
+        
+        
+        """
+        self.d_k = d_k
+        self.d_in = d_in
+        self.q_net = nn.Linear(d_in, d_k) # Dimension -> [batch_size, token_length, input_vector_dimension -> key_vector_dimension]
+        self.k_net = nn.Linear(d_in, d_k)
+        self.v_net = nn.Linear(d_in, d_v)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        """
+        Attention
+        :param x:
+        :return:
+        """
+        q = self.q_net(x)
+        k = self.k_net(x)
+        v = self.v_net(x)
+
+        # first, get Attention Distribution Q * K^(T)
+        self.Attn_Dist = torch.matmul(q , k.transpose(-2, -1))
+
+        # divide by Key vector dimention for stability
+
+        self.Attn_Dist = self.Attn_Dist / torch.sqrt(torch.tensor(self.d_k, dtype=torch.float32))
+
+        # get Attention Score
+
+        self.Attn_Score = self.softmax(self.Attn_Dist)
+
+        self.out = torch.matmul(self.Attn_Score , v)
+        return self.out
+
+class MultiheadAttentionLayer(BaseModel):
+    def __init__(self, d_in, d_v, d_k = 100, head_n = 8, device = 'cpu', lr = 0.0001):
+
+        super().__init__(device, lr)
+        """
+
+        :param d_in: input vector dimension
+        :param d_v: value vector dimension
+        :param d_k: key vector dimensionn
+        :param head_n: number of multi heads
+
+        output dimension must be d_v * head_n
+        """
+        self.d_in = d_in
+        self.d_v = d_v
+        self.d_k = d_k
+        self.head_n = head_n
+
+        self.Attention_Heads = nn.ModuleList(AttentionLayer(self.d_in, self.d_v, self.d_k) for i in range(0,self.head_n))
+
+    def forward(self, x):
+        result = []
+        for i in range(0, self.head_n):
+            result.append(self.Attention_Heads[i].forward(x))
+
+        result = torch.concat(result, dim=-1)
+        return result
+
+
+
+
+
 
 
 
